@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceRTC — Аудиозвонки</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        darkbg: '#0f1016',
+                        cardbg: 'rgba(25, 27, 38, 0.75)',
+                        accent: '#8b5cf6',
+                        accentHover: '#7c3aed'
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Supabase JS SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        .glass {
+            background: rgba(25, 27, 38, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+    </style>
+</head>
+<body class="bg-darkbg text-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
+
+    <!-- Основной контейнер приложения -->
+    <div id="app" class="w-full max-w-md glass rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[650px]">
+        
+        <!-- Шапка: Профиль пользователя -->
+        <div class="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/40">
+            <div>
+                <h1 class="text-lg font-bold flex items-center gap-2">
+                    <span id="myName" class="text-accent">Загрузка...</span>
+                </h1>
+                <p class="text-xs text-gray-400">Ваш ID: <span id="myTag" class="font-mono bg-gray-800 px-1.5 py-0.5 rounded text-gray-200">----</span></p>
+            </div>
+            <button onclick="editName()" class="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg transition">Изменить имя</button>
+        </div>
+
+        <!-- Вкладки / Панель поиска и друзей -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-4">
+            
+            <!-- Поиск пользователей -->
+            <div>
+                <label class="block text-xs font-medium text-gray-400 mb-1">Найти пользователя по ID</label>
+                <div class="flex gap-2">
+                    <input type="text" id="searchInput" placeholder="Например: A4F2" class="flex-1 bg-gray-900/60 border border-gray-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-accent uppercase">
+                    <button onclick="searchUser()" class="bg-accent hover:bg-accentHover px-4 py-2 rounded-xl text-sm font-medium transition">Найти</button>
+                </div>
+                <div id="searchResult" class="mt-2"></div>
+            </div>
+
+            <!-- Список друзей -->
+            <div>
+                <h2 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Ваши друзья</h2>
+                <div id="friendsList" class="space-y-2">
+                    <!-- Список заполняется динамически -->
+                    <p class="text-xs text-gray-500 text-center py-4">Список друзей пуст</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Модальное окно входящего звонка -->
+    <div id="incomingModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center p-4 z-50">
+        <div class="glass p-6 rounded-2xl text-center max-w-sm w-full space-y-4">
+            <div class="w-16 h-16 bg-accent/20 rounded-full flex items-center justify-center mx-auto text-accent text-2xl font-bold animate-pulse">📞</div>
+            <h3 class="text-lg font-bold">Входящий аудиозвонок</h3>
+            <p id="callerName" class="text-sm text-gray-300">Пользователь звонит вам...</p>
+            <div class="flex gap-3 justify-center pt-2">
+                <button onclick="rejectCall()" class="bg-red-600 hover:bg-red-700 px-5 py-2.5 rounded-xl font-medium text-sm transition flex-1">Сбросить</button>
+                <button onclick="acceptCall()" class="bg-green-600 hover:bg-green-700 px-5 py-2.5 rounded-xl font-medium text-sm transition flex-1">Принять</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно активного звонка -->
+    <div id="activeCallModal" class="fixed inset-0 bg-darkbg/95 backdrop-blur-md hidden flex flex-col items-center justify-between p-6 z-50">
+        <div class="text-center pt-16 space-y-2">
+            <div class="w-20 h-20 bg-accent/20 rounded-full flex items-center justify-center mx-auto text-accent text-3xl animate-pulse">🎙️</div>
+            <h2 id="activeCallTitle" class="text-xl font-bold">Разговор с собеседником</h2>
+            <p id="callStatusText" class="text-sm text-green-400">Соединение установлено...</p>
+        </div>
+
+        <!-- Скрытый аудиоэлемент для воспроизведения голоса собеседника -->
+        <audio id="remoteAudio" autoplay></audio>
+
+        <div class="flex gap-4 pb-10">
+            <button onclick="toggleMute()" id="muteBtn" class="bg-gray-800 hover:bg-gray-700 p-4 rounded-full text-lg transition shadow-lg">🔇</button>
+            <button onclick="endCall()" class="bg-red-600 hover:bg-red-700 px-8 py-4 rounded-full font-bold transition shadow-lg shadow-red-600/30">Завершить</button>
+        </div>
+    </div>
+
+    <script>
+        // --- КОНФИГУРАЦИЯ SUPABASE (Интегрирована) ---
+        const SUPABASE_URL = 'https://szkljmcpyvhzjgqplcta.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN6a2xqbWNweXZoempncXBsY3RhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2MDExMDMsImV4cCI6MjEwOTE3NzEwM30.XPJ5x7Kfv8LmB09-MGU292lFdQ-Ptc-DRVd5D8v2wVc';
+        
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        let currentUser = null;
+        let peerConnection = null;
+        let currentCallChannel = null;
+        let localStream = null;
+        let incomingSignalData = null;
+        let activeTargetUserTag = null;
+
+        // Конфигурация STUN-серверов Google для обхода NAT
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        // Генерация случайного 4-значного тега (буквы + цифры)
+        function generateTag() {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let res = '';
+            for (let i = 0; i < 4; i++) {
+                res += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return res;
+        }
+
+        // Инициализация пользователя при старте
+        async function initUser() {
+            let userUuid = localStorage.getItem('webrtc_user_uuid');
+            let userTag = localStorage.getItem('webrtc_user_tag');
+            let userName = localStorage.getItem('webrtc_user_name');
+
+            if (!userUuid || !userTag) {
+                userTag = generateTag();
+                userName = 'Пользователь ' + userTag;
+                
+                const { data, error } = await supabase
+                    .from('users')
+                    .insert([{ tag: userTag, name: userName, status: 'online' }])
+                    .select()
+                    .single();
+
+                if (error) {
+                    alert('Ошибка создания пользователя в БД. Убедитесь, что выполнили SQL-скрипт в Supabase!\n\nДетали: ' + error.message);
+                    return;
+                }
+
+                userUuid = data.id;
+                localStorage.setItem('webrtc_user_uuid', userUuid);
+                localStorage.setItem('webrtc_user_tag', userTag);
+                localStorage.setItem('webrtc_user_name', userName);
+            } else {
+                // Обновляем статус на онлайн
+                await supabase.from('users').update({ status: 'online' }).eq('id', userUuid);
+            }
+
+            currentUser = { id: userUuid, tag: userTag, name: userName };
+            document.getElementById('myName').innerText = userName;
+            document.getElementById('myTag').innerText = userTag;
+
+            // Подписываемся на свой сигнальный канал для входящих звонков
+            setupSignalingChannel(currentUser.tag);
+            loadFriends();
+        }
+
+        async function editName() {
+            const newName = prompt('Введите ваше имя:', currentUser.name);
+            if (!newName) return;
+            await supabase.from('users').update({ name: newName }).eq('id', currentUser.id);
+            localStorage.setItem('webrtc_user_name', newName);
+            currentUser.name = newName;
+            document.getElementById('myName').innerText = newName;
+        }
+
+        // --- ПОИСК И ДОБАВЛЕНИЕ ДРУЗЕЙ ---
+        async function searchUser() {
+            const queryTag = document.getElementById('searchInput').value.trim().toUpperCase();
+            const resultDiv = document.getElementById('searchResult');
+            
+            if (!queryTag) return;
+            if (queryTag === currentUser.tag) {
+                resultDiv.innerHTML = `<p class="text-xs text-yellow-500 mt-1">Это ваш собственный ID</p>`;
+                return;
+            }
+
+            const { data, error } = await supabase
+                .from('users')
+                .select('*')
+                .eq('tag', queryTag)
+                .single();
+
+            if (error || !data) {
+                resultDiv.innerHTML = `<p class="text-xs text-red-400 mt-1">Пользователь не найден</p>`;
+                return;
+            }
+
+            resultDiv.innerHTML = `
+                <div class="flex items-center justify-between bg-gray-900/80 p-2.5 rounded-xl border border-gray-800 mt-2">
+                    <div>
+                        <p class="text-sm font-medium">${data.name}</p>
+                        <p class="text-xs text-gray-400 font-mono">ID: ${data.tag}</p>
+                    </div>
+                    <button onclick="addFriend('${data.id}')" class="bg-accent hover:bg-accentHover text-xs px-3 py-1.5 rounded-lg font-medium transition">Добавить</button>
+                </div>
+            `;
+        }
+
+        async function addFriend(friendUuid) {
+            const { error } = await supabase
+                .from('friends')
+                .insert([{ user_id: currentUser.id, friend_id: friendUuid }]);
+
+            if (error) {
+                alert('Этот пользователь уже у вас в друзьях или произошла ошибка');
+                return;
+            }
+            alert('Пользователь добавлен в друзья!');
+            document.getElementById('searchResult').innerHTML = '';
+            document.getElementById('searchInput').value = '';
+            loadFriends();
+        }
+
+        async function loadFriends() {
+            const { data, error } = await supabase
+                .from('friends')
+                .select(`
+                    friend_id,
+                    users:friend_id (id, tag, name, status)
+                `)
+                .eq('user_id', currentUser.id);
+
+            const container = document.getElementById('friendsList');
+            if (error || !data || data.length === 0) {
+                container.innerHTML = `<p class="text-xs text-gray-500 text-center py-4">Список друзей пуст</p>`;
+                return;
+            }
+
+            container.innerHTML = data.map(item => {
+                const f = item.users;
+                if (!f) return '';
+                const statusColor = f.status === 'online' ? 'bg-green-500' : 'bg-gray-500';
+                return `
+                    <div class="flex items-center justify-between bg-gray-900/50 p-3 rounded-xl border border-gray-800/80">
+                        <div class="flex items-center gap-3">
+                            <div class="w-2.5 h-2.5 rounded-full ${statusColor}"></div>
+                            <div>
+                                <p class="text-sm font-medium">${f.name}</p>
+                                <p class="text-xs text-gray-400 font-mono">ID: ${f.tag}</p>
+                            </div>
+                        </div>
+                        <button onclick="startCall('${f.tag}', '${f.name}')" class="bg-green-600/80 hover:bg-green-600 text-xs px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5">
+                            📞 Позвонить
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // --- WEBRTC И СИГНАЛИЗАЦИЯ ЧЕРЕЗ SUPABASE REALTIME BROADCAST ---
+        function setupSignalingChannel(tag) {
+            currentCallChannel = supabase.channel(`call_room_${tag}`, {
+                config: { broadcast: { ack: true } }
+            });
+
+            currentCallChannel
+                .on('broadcast', { event: 'offer' }, async ({ payload }) => {
+                    incomingSignalData = payload;
+                    document.getElementById('callerName').innerText = `${payload.callerName} (${payload.callerTag}) вызывает вас...`;
+                    document.getElementById('incomingModal').classList.remove('hidden');
+                })
+                .on('broadcast', { event: 'answer' }, async ({ payload }) => {
+                    if (peerConnection) {
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.answer));
+                        document.getElementById('callStatusText').innerText = 'Разговор идет...';
+                    }
+                })
+                .on('broadcast', { event: 'candidate' }, async ({ payload }) => {
+                    if (peerConnection && payload.candidate) {
+                        try {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
+                        } catch (e) {
+                            console.error('Ошибка добавления ICE кандидата', e);
+                        }
+                    }
+                })
+                .on('broadcast', { event: 'hangup' }, () => {
+                    closeCall();
+                })
+                .subscribe();
+        }
+
+        async function createPeerConnection(targetTag) {
+            peerConnection = new RTCPeerConnection(rtcConfig);
+
+            // Получаем аудиопоток с микрофона
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            } catch (e) {
+                alert('Не удалось получить доступ к микрофону! Разрешите доступ в браузере.');
+                return null;
+            }
+
+            // Обработка входящего медиапотока от собеседника
+            peerConnection.ontrack = (event) => {
+                const remoteAudio = document.getElementById('remoteAudio');
+                remoteAudio.srcObject = event.streams[0];
+            };
+
+            // Отправка ICE кандидатов через Supabase Broadcast
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    supabase.channel(`call_room_${targetTag}`).send({
+                        type: 'broadcast',
+                        event: 'candidate',
+                        payload: { candidate: event.candidate }
+                    });
+                }
+            };
+
+            return peerConnection;
+        }
+
+        // Инициация звонка
+        async function startCall(targetTag, targetName) {
+            activeTargetUserTag = targetTag;
+            document.getElementById('activeCallTitle').innerText = `Звонок: ${targetName}`;
+            document.getElementById('callStatusText').innerText = 'Вызов абонента...';
+            document.getElementById('activeCallModal').classList.remove('hidden');
+
+            const pc = await createPeerConnection(targetTag);
+            if (!pc) return;
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            // Отправляем оффер на канал вызываемого пользователя
+            supabase.channel(`call_room_${targetTag}`).send({
+                type: 'broadcast',
+                event: 'offer',
+                payload: {
+                    offer: offer,
+                    callerTag: currentUser.tag,
+                    callerName: currentUser.name
+                }
+            });
+        }
+
+        // Принятие входящего звонка
+        async function acceptCall() {
+            document.getElementById('incomingModal').classList.add('hidden');
+            document.getElementById('activeCallTitle').innerText = `Разговор с ${incomingSignalData.callerName}`;
+            document.getElementById('callStatusText').innerText = 'Подключение...';
+            document.getElementById('activeCallModal').classList.remove('hidden');
+
+            activeTargetUserTag = incomingSignalData.callerTag;
+            const pc = await createPeerConnection(activeTargetUserTag);
+            if (!pc) return;
+
+            await pc.setRemoteDescription(new RTCSessionDescription(incomingSignalData.offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            supabase.channel(`call_room_${activeTargetUserTag}`).send({
+                type: 'broadcast',
+                event: 'answer',
+                payload: { answer: answer }
+            });
+        }
+
+        function rejectCall() {
+            document.getElementById('incomingModal').classList.add('hidden');
+            if (incomingSignalData) {
+                supabase.channel(`call_room_${incomingSignalData.callerTag}`).send({
+                    type: 'broadcast',
+                    event: 'hangup'
+                });
+            }
+            incomingSignalData = null;
+        }
+
+        function endCall() {
+            if (activeTargetUserTag) {
+                supabase.channel(`call_room_${activeTargetUserTag}`).send({
+                    type: 'broadcast',
+                    event: 'hangup'
+                });
+            }
+            closeCall();
+        }
+
+        function closeCall() {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            document.getElementById('incomingModal').classList.add('hidden');
+            document.getElementById('activeCallModal').classList.add('hidden');
+            activeTargetUserTag = null;
+            incomingSignalData = null;
+        }
+
+        function toggleMute() {
+            if (localStream) {
+                const audioTrack = localStream.getAudioTracks()[0];
+                audioTrack.enabled = !audioTrack.enabled;
+                document.getElementById('muteBtn').innerText = audioTrack.enabled ? '🔇' : '🔊';
+            }
+        }
+
+        // Запуск при загрузке страницы
+        window.onload = initUser;
+    </script>
+</body>
+</html>
