@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceRTC — Аудиозвонки</title>
+    <title>VoiceRTC — Профессиональные звонки</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -25,8 +25,8 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         .glass {
-            background: rgba(25, 27, 38, 0.7);
-            backdrop-filter: blur(12px);
+            background: rgba(25, 27, 38, 0.75);
+            backdrop-filter: blur(14px);
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
     </style>
@@ -40,7 +40,7 @@
         <div class="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/40">
             <div>
                 <h1 class="text-lg font-bold flex items-center gap-2">
-                    <span id="myName" class="text-accent">Загрузка...</span>
+                    <span id="myName" class="text-accent">Подключение...</span>
                 </h1>
                 <p class="text-xs text-gray-400">Ваш ID: <span id="myTag" class="font-mono bg-gray-800 px-1.5 py-0.5 rounded text-gray-200">----</span></p>
             </div>
@@ -64,7 +64,6 @@
             <div>
                 <h2 class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Ваши друзья</h2>
                 <div id="friendsList" class="space-y-2">
-                    <!-- Список заполняется динамически -->
                     <p class="text-xs text-gray-500 text-center py-4">Список друзей пуст</p>
                 </div>
             </div>
@@ -93,7 +92,7 @@
             <p id="callStatusText" class="text-sm text-green-400">Соединение установлено...</p>
         </div>
 
-        <!-- Скрытый аудиоэлемент для воспроизведения голоса собеседника -->
+        <!-- Аудиопоток собеседника -->
         <audio id="remoteAudio" autoplay></audio>
 
         <div class="flex gap-4 pb-10">
@@ -103,7 +102,7 @@
     </div>
 
     <script>
-        // --- КОНФИГУРАЦИЯ SUPABASE (Интегрирована) ---
+        // --- КОНФИГУРАЦИЯ SUPABASE ---
         const SUPABASE_URL = 'https://szkljmcpyvhzjgqplcta.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN6a2xqbWNweXZoempncXBsY3RhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2MDExMDMsImV4cCI6MjEwOTE3NzEwM30.XPJ5x7Kfv8LmB09-MGU292lFdQ-Ptc-DRVd5D8v2wVc';
         
@@ -116,7 +115,7 @@
         let incomingSignalData = null;
         let activeTargetUserTag = null;
 
-        // Конфигурация STUN-серверов Google для обхода NAT
+        // Конфигурация STUN-серверов Google
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -124,7 +123,7 @@
             ]
         };
 
-        // Генерация случайного 4-значного тега (буквы + цифры)
+        // Генерация 4-значного ID
         function generateTag() {
             const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
             let res = '';
@@ -134,43 +133,60 @@
             return res;
         }
 
-        // Инициализация пользователя при старте
+        // Инициализация при старте
         async function initUser() {
-            let userUuid = localStorage.getItem('webrtc_user_uuid');
-            let userTag = localStorage.getItem('webrtc_user_tag');
-            let userName = localStorage.getItem('webrtc_user_name');
+            try {
+                let userUuid = localStorage.getItem('webrtc_user_uuid');
+                let userTag = localStorage.getItem('webrtc_user_tag');
+                let userName = localStorage.getItem('webrtc_user_name');
 
-            if (!userUuid || !userTag) {
-                userTag = generateTag();
-                userName = 'Пользователь ' + userTag;
-                
-                const { data, error } = await supabase
-                    .from('users')
-                    .insert([{ tag: userTag, name: userName, status: 'online' }])
-                    .select()
-                    .single();
+                if (!userUuid || !userTag) {
+                    userTag = generateTag();
+                    userName = 'Пользователь ' + userTag;
+                    
+                    const { data, error } = await supabase
+                        .from('users')
+                        .insert([{ tag: userTag, name: userName, status: 'online' }])
+                        .select()
+                        .single();
 
-                if (error) {
-                    alert('Ошибка создания пользователя в БД. Убедитесь, что выполнили SQL-скрипт в Supabase!\n\nДетали: ' + error.message);
-                    return;
+                    if (error) {
+                        alert('Ошибка базы данных: ' + error.message + '\n\nУбедитесь, что выполнили SQL-скрипт в Supabase!');
+                        document.getElementById('myName').innerText = 'Ошибка БД';
+                        return;
+                    }
+
+                    userUuid = data.id;
+                    localStorage.setItem('webrtc_user_uuid', userUuid);
+                    localStorage.setItem('webrtc_user_tag', userTag);
+                    localStorage.setItem('webrtc_user_name', userName);
+                } else {
+                    // Проверяем, существует ли пользователь в базе, если нет — создаем заново
+                    const { data: existingUser } = await supabase
+                        .from('users')
+                        .select('id')
+                        .eq('id', userUuid)
+                        .single();
+
+                    if (!existingUser) {
+                        localStorage.clear();
+                        location.reload();
+                        return;
+                    }
+
+                    await supabase.from('users').update({ status: 'online' }).eq('id', userUuid);
                 }
 
-                userUuid = data.id;
-                localStorage.setItem('webrtc_user_uuid', userUuid);
-                localStorage.setItem('webrtc_user_tag', userTag);
-                localStorage.setItem('webrtc_user_name', userName);
-            } else {
-                // Обновляем статус на онлайн
-                await supabase.from('users').update({ status: 'online' }).eq('id', userUuid);
+                currentUser = { id: userUuid, tag: userTag, name: userName };
+                document.getElementById('myName').innerText = userName;
+                document.getElementById('myTag').innerText = userTag;
+
+                setupSignalingChannel(currentUser.tag);
+                loadFriends();
+            } catch (err) {
+                console.error('Ошибка инициализации:', err);
+                document.getElementById('myName').innerText = 'Ошибка связи';
             }
-
-            currentUser = { id: userUuid, tag: userTag, name: userName };
-            document.getElementById('myName').innerText = userName;
-            document.getElementById('myTag').innerText = userTag;
-
-            // Подписываемся на свой сигнальный канал для входящих звонков
-            setupSignalingChannel(currentUser.tag);
-            loadFriends();
         }
 
         async function editName() {
@@ -221,7 +237,7 @@
                 .insert([{ user_id: currentUser.id, friend_id: friendUuid }]);
 
             if (error) {
-                alert('Этот пользователь уже у вас в друзьях или произошла ошибка');
+                alert('Этот пользователь уже у вас в друзьях');
                 return;
             }
             alert('Пользователь добавлен в друзья!');
@@ -266,7 +282,7 @@
             }).join('');
         }
 
-        // --- WEBRTC И СИГНАЛИЗАЦИЯ ЧЕРЕЗ SUPABASE REALTIME BROADCAST ---
+        // --- WEBRTC СИГНАЛИЗАЦИЯ ---
         function setupSignalingChannel(tag) {
             currentCallChannel = supabase.channel(`call_room_${tag}`, {
                 config: { broadcast: { ack: true } }
@@ -289,7 +305,7 @@
                         try {
                             await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
                         } catch (e) {
-                            console.error('Ошибка добавления ICE кандидата', e);
+                            console.error('Ошибка ICE', e);
                         }
                     }
                 })
@@ -302,22 +318,19 @@
         async function createPeerConnection(targetTag) {
             peerConnection = new RTCPeerConnection(rtcConfig);
 
-            // Получаем аудиопоток с микрофона
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                 localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
             } catch (e) {
-                alert('Не удалось получить доступ к микрофону! Разрешите доступ в браузере.');
+                alert('Не удалось получить доступ к микрофону! Проверьте разрешения.');
                 return null;
             }
 
-            // Обработка входящего медиапотока от собеседника
             peerConnection.ontrack = (event) => {
                 const remoteAudio = document.getElementById('remoteAudio');
                 remoteAudio.srcObject = event.streams[0];
             };
 
-            // Отправка ICE кандидатов через Supabase Broadcast
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
                     supabase.channel(`call_room_${targetTag}`).send({
@@ -331,7 +344,6 @@
             return peerConnection;
         }
 
-        // Инициация звонка
         async function startCall(targetTag, targetName) {
             activeTargetUserTag = targetTag;
             document.getElementById('activeCallTitle').innerText = `Звонок: ${targetName}`;
@@ -344,7 +356,6 @@
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-            // Отправляем оффер на канал вызываемого пользователя
             supabase.channel(`call_room_${targetTag}`).send({
                 type: 'broadcast',
                 event: 'offer',
@@ -356,7 +367,6 @@
             });
         }
 
-        // Принятие входящего звонка
         async function acceptCall() {
             document.getElementById('incomingModal').classList.add('hidden');
             document.getElementById('activeCallTitle').innerText = `Разговор с ${incomingSignalData.callerName}`;
@@ -422,7 +432,6 @@
             }
         }
 
-        // Запуск при загрузке страницы
         window.onload = initUser;
     </script>
 </body>
